@@ -7,22 +7,36 @@
 #include <iostream>
 #include <regex>
 #include <sstream>
+#include <utility>
 
 namespace bank {
 
-using namespace std;
-
-bool nearlyZero(double x) { return fabs(x) < 0.005; }
-
-bool isLeap(int y) { return (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0); }
-int daysInYear(int y) { return isLeap(y) ? 366 : 365; }
-int daysInMonth(int y, int m) {
-    static const int kDays[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-    if (m == 2 && isLeap(y)) return 29;
-    return kDays[m];
+namespace {
+bool nearlyZero(double v) { return std::fabs(v) < 0.005; }
 }
 
-long long daysFromCivil(int y, unsigned m, unsigned d) {
+Date::Date(int year, int month, int day) : y_(year), m_(month), d_(day) {}
+
+int Date::year() const { return y_; }
+int Date::month() const { return m_; }
+int Date::day() const { return d_; }
+
+bool Date::isLeapYear(int year) {
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+int Date::daysInMonth(int year, int month) {
+    static const int kDays[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month == 2 && isLeapYear(year)) return 29;
+    return kDays[month];
+}
+
+bool Date::isValid(int year, int month, int day) {
+    if (year <= 0 || month <= 0 || month > 12 || day <= 0) return false;
+    return day <= daysInMonth(year, month);
+}
+
+long long Date::daysFromCivil(int y, unsigned m, unsigned d) {
     y -= m <= 2;
     const int era = (y >= 0 ? y : y - 399) / 400;
     const unsigned yoe = static_cast<unsigned>(y - era * 400);
@@ -31,48 +45,108 @@ long long daysFromCivil(int y, unsigned m, unsigned d) {
     return era * 146097 + static_cast<int>(doe) - 719468;
 }
 
-int weekdayIndex(const SimpleDate& dt) {
-    long long delta = daysFromCivil(dt.y, dt.m, dt.d) - daysFromCivil(1970, 1, 1);
+int Date::weekdayIndex() const {
+    long long delta = daysFromCivil(y_, m_, d_) - daysFromCivil(1970, 1, 1);
     return static_cast<int>((4 + (delta % 7 + 7) % 7) % 7);
 }
 
-string showDateString(const SimpleDate& dt) {
-    static const vector<string> kWeek = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
-    static const vector<string> kMonth = {"", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
-    ostringstream oss;
-    oss << kWeek[weekdayIndex(dt)] << ", " << kMonth[dt.m] << " " << dt.d << ", " << dt.y;
+std::string Date::toDisplayString() const {
+    static const std::vector<std::string> kWeek = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+    static const std::vector<std::string> kMonth = {"", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
+    std::ostringstream oss;
+    oss << kWeek[weekdayIndex()] << ", " << kMonth[m_] << " " << d_ << ", " << y_;
     return oss.str();
 }
 
-bool validDate(int y, int m, int d) {
-    if (y <= 0 || m <= 0 || m > 12 || d <= 0) return false;
-    return d <= daysInMonth(y, m);
+bool Date::isAfter(const Date& rhs) const {
+    if (y_ != rhs.y_) return y_ > rhs.y_;
+    if (m_ != rhs.m_) return m_ > rhs.m_;
+    return d_ > rhs.d_;
 }
 
-bool isAfter(const SimpleDate& a, const SimpleDate& b) {
-    if (a.y != b.y) return a.y > b.y;
-    if (a.m != b.m) return a.m > b.m;
-    return a.d > b.d;
-}
-
-SimpleDate nextDay(SimpleDate x) {
-    ++x.d;
-    if (x.d > daysInMonth(x.y, x.m)) {
-        x.d = 1;
-        ++x.m;
-        if (x.m > 12) {
-            x.m = 1;
-            ++x.y;
+void Date::advanceOneDay() {
+    ++d_;
+    if (d_ > daysInMonth(y_, m_)) {
+        d_ = 1;
+        ++m_;
+        if (m_ > 12) {
+            m_ = 1;
+            ++y_;
         }
     }
-    return x;
+}
+
+int Date::daysInCurrentYear() const { return isLeapYear(y_) ? 366 : 365; }
+
+Account::Account(int id, AccountType type, std::string name, std::string owner, double initialAmountOrCredit)
+    : id_(id), type_(type), name_(std::move(name)), owner_(std::move(owner)) {
+    if (type_ == AccountType::Savings) {
+        balance_ = initialAmountOrCredit;
+    } else {
+        credit_ = initialAmountOrCredit;
+    }
+}
+
+int Account::id() const { return id_; }
+AccountType Account::type() const { return type_; }
+const std::string& Account::name() const { return name_; }
+const std::string& Account::owner() const { return owner_; }
+double Account::balance() const { return balance_; }
+double Account::credit() const { return credit_; }
+
+void Account::setName(const std::string& newName) { name_ = newName; }
+
+bool Account::setCredit(double newCredit) {
+    if (type_ != AccountType::Credit || newCredit < 0) return false;
+    credit_ = newCredit;
+    return true;
+}
+
+void Account::deposit(double amount) { balance_ += amount; }
+
+bool Account::canWithdraw(double amount) const {
+    if (amount < 0) return false;
+    if (type_ == AccountType::Savings) return balance_ + 1e-9 >= amount;
+    return balance_ + credit_ + 1e-9 >= amount;
+}
+
+bool Account::withdraw(double amount) {
+    if (!canWithdraw(amount)) return false;
+    balance_ -= amount;
+    return true;
+}
+
+void Account::accrueDailyInterest(const Date& date) {
+    if (type_ == AccountType::Savings) {
+        pendingInterest_ += balance_ * (kSavingsAnnualRate / date.daysInCurrentYear());
+    } else {
+        if (balance_ < 0)
+            pendingInterest_ += balance_ * kCreditNegativeDailyRate;
+        else
+            pendingInterest_ += balance_ * (kCreditAnnualRate / date.daysInCurrentYear());
+    }
+}
+
+void Account::postMonthlyInterestIfNeeded(const Date& date) {
+    if (date.day() != 1) return;
+    balance_ += pendingInterest_;
+    pendingInterest_ = 0;
+}
+
+bool Account::canClose() const { return nearlyZero(balance_); }
+
+void Account::print(std::ostream& out) const {
+    out << id_ << ' ' << (type_ == AccountType::Savings ? 'S' : 'C') << ' ' << name_ << ' ' << std::fixed
+        << std::setprecision(2) << balance_;
+    if (type_ == AccountType::Credit) out << ' ' << std::fixed << std::setprecision(2) << credit_;
+    out << '\n';
 }
 
 BankSystem::BankSystem() { resetInitial(); }
 
 void BankSystem::run() {
-    string line;
-    while (getline(cin, line)) {
+    std::string line;
+    while (std::getline(std::cin, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty()) continue;
         execute(line, false, true);
@@ -80,70 +154,26 @@ void BankSystem::run() {
 }
 
 void BankSystem::resetInitial() {
-    accounts.clear();
-    users.clear();
-    logs.clear();
-    users.insert("default");
-    users.insert("admin");
-    currentUser = "default";
-    currentDate = {1970, 1, 1};
+    accounts_.clear();
+    users_.clear();
+    logs_.clear();
+    users_.insert("default");
+    users_.insert("admin");
+    currentUser_ = "default";
+    currentDate_ = Date(1970, 1, 1);
 }
 
-bool BankSystem::isAdmin() const { return currentUser == "admin"; }
+bool BankSystem::isAdmin() const { return currentUser_ == "admin"; }
 
-void BankSystem::addLogIfNeeded(const string& raw, bool changed, bool allowLog) {
-    if (changed && allowLog) logs.push_back(raw);
+bool BankSystem::canAccessOwnedAccount(int id) const {
+    auto it = accounts_.find(id);
+    return it != accounts_.end() && it->second.owner() == currentUser_;
 }
 
-void BankSystem::printBool(bool ok, bool silent) {
-    if (!silent) cout << (ok ? 1 : 0) << '\n';
-}
-
-void BankSystem::printAccount(const Account& a) {
-    cout << a.id << ' ' << (a.type == AccountType::Savings ? 'S' : 'C') << ' ' << a.name << ' ' << fixed
-         << setprecision(2) << a.balance;
-    if (a.type == AccountType::Credit) cout << ' ' << fixed << setprecision(2) << a.credit;
-    cout << '\n';
-}
-
-void BankSystem::settleOneDayForAll() {
-    for (auto& [_, a] : accounts) {
-        if (a.type == AccountType::Savings) {
-            a.pendingInterest += a.balance * (SAVINGS_ANNUAL_RATE / daysInYear(currentDate.y));
-        } else {
-            if (a.balance < 0)
-                a.pendingInterest += a.balance * CREDIT_NEG_DAILY_RATE;
-            else
-                a.pendingInterest += a.balance * (CREDIT_ANNUAL_RATE / daysInYear(currentDate.y));
-        }
-    }
-}
-
-void BankSystem::advanceOneDay() {
-    settleOneDayForAll();
-    currentDate = nextDay(currentDate);
-    if (currentDate.d == 1) {
-        for (auto& [_, a] : accounts) {
-            a.balance += a.pendingInterest;
-            a.pendingInterest = 0.0;
-        }
-    }
-}
-
-bool BankSystem::parseDouble(const string& s, double& out) {
+bool BankSystem::parseInt(const std::string& s, int& out) {
     try {
         size_t p = 0;
-        out = stod(s, &p);
-        return p == s.size();
-    } catch (...) {
-        return false;
-    }
-}
-
-bool BankSystem::parseInt(const string& s, int& out) {
-    try {
-        size_t p = 0;
-        long long v = stoll(s, &p);
+        long long v = std::stoll(s, &p);
         if (p != s.size() || v < INT_MIN || v > INT_MAX) return false;
         out = static_cast<int>(v);
         return true;
@@ -152,183 +182,190 @@ bool BankSystem::parseInt(const string& s, int& out) {
     }
 }
 
-bool BankSystem::canAccessOwned(int id) const {
-    auto it = accounts.find(id);
-    return it != accounts.end() && it->second.owner == currentUser;
+bool BankSystem::parseDouble(const std::string& s, double& out) {
+    try {
+        size_t p = 0;
+        out = std::stod(s, &p);
+        return p == s.size();
+    } catch (...) {
+        return false;
+    }
 }
 
-bool BankSystem::execute(const string& raw, bool silent, bool allowLog) {
-    istringstream iss(raw);
-    vector<string> tok;
-    for (string t; iss >> t;) tok.push_back(t);
+bool BankSystem::isValidUsername(const std::string& username) {
+    static const std::regex kRe("^[A-Za-z0-9]+$");
+    return std::regex_match(username, kRe);
+}
+
+void BankSystem::outputBool(bool ok, bool silent) const {
+    if (!silent) std::cout << (ok ? 1 : 0) << '\n';
+}
+
+void BankSystem::outputAccount(const Account& acc, bool silent) const {
+    if (!silent) acc.print(std::cout);
+}
+
+void BankSystem::appendLogIfNeeded(const std::string& raw, bool changed, bool allowLog) {
+    if (changed && allowLog) logs_.push_back(raw);
+}
+
+void BankSystem::settleOneDay() {
+    for (auto& [_, acc] : accounts_) acc.accrueDailyInterest(currentDate_);
+    currentDate_.advanceOneDay();
+    for (auto& [_, acc] : accounts_) acc.postMonthlyInterestIfNeeded(currentDate_);
+}
+
+bool BankSystem::execute(const std::string& raw, bool silent, bool allowLog) {
+    std::istringstream iss(raw);
+    std::vector<std::string> tok;
+    for (std::string t; iss >> t;) tok.push_back(t);
     if (tok.empty()) return false;
 
-    bool ok = false, changed = false;
-    const string& cmd = tok[0];
+    bool ok = false;
+    bool changed = false;
+    const std::string& cmd = tok[0];
 
     if (cmd == "OPEN" && tok.size() == 5) {
         int id;
         double amount;
-        if (parseInt(tok[1], id) && id > 0 && parseDouble(tok[4], amount) && amount >= 0 && accounts.count(id) == 0 &&
+        if (parseInt(tok[1], id) && id > 0 && parseDouble(tok[4], amount) && amount >= 0 && !accounts_.count(id) &&
             (tok[2] == "S" || tok[2] == "C")) {
-            Account a;
-            a.id = id;
-            a.name = tok[3];
-            a.owner = currentUser;
-            if (tok[2] == "S") {
-                a.type = AccountType::Savings;
-                a.balance = amount;
-            } else {
-                a.type = AccountType::Credit;
-                a.balance = 0;
-                a.credit = amount;
-            }
-            accounts[id] = a;
+            AccountType type = tok[2] == "S" ? AccountType::Savings : AccountType::Credit;
+            accounts_.emplace(id, Account(id, type, tok[3], currentUser_, amount));
             ok = changed = true;
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "CLOSE" && tok.size() == 2) {
         int id;
-        if (parseInt(tok[1], id) && canAccessOwned(id) && nearlyZero(accounts[id].balance)) {
-            accounts.erase(id);
+        if (parseInt(tok[1], id) && canAccessOwnedAccount(id) && accounts_[id].canClose()) {
+            accounts_.erase(id);
             ok = changed = true;
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "MODIFY" && tok.size() == 4 && tok[1] == "NAME") {
         int id;
-        if (parseInt(tok[2], id) && canAccessOwned(id)) {
-            accounts[id].name = tok[3];
+        if (parseInt(tok[2], id) && canAccessOwnedAccount(id)) {
+            accounts_[id].setName(tok[3]);
             ok = changed = true;
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "MODIFY" && tok.size() == 4 && tok[1] == "CREDIT") {
         int id;
-        double c;
-        if (parseInt(tok[2], id) && canAccessOwned(id) && parseDouble(tok[3], c) && c >= 0 &&
-            accounts[id].type == AccountType::Credit) {
-            accounts[id].credit = c;
+        double credit;
+        if (parseInt(tok[2], id) && canAccessOwnedAccount(id) && parseDouble(tok[3], credit) && accounts_[id].setCredit(credit)) {
             ok = changed = true;
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "QUERY" && tok.size() == 2) {
         int id;
-        if (parseInt(tok[1], id) && canAccessOwned(id)) {
+        if (parseInt(tok[1], id) && canAccessOwnedAccount(id)) {
             ok = true;
-            if (!silent) printAccount(accounts[id]);
-        } else
-            printBool(false, silent);
+            outputAccount(accounts_[id], silent);
+        } else {
+            outputBool(false, silent);
+        }
     } else if (cmd == "QUERYALL" && tok.size() == 1) {
-        vector<int> ids;
-        for (const auto& [id, a] : accounts)
-            if (a.owner == currentUser) ids.push_back(id);
-        if (ids.empty())
-            printBool(false, silent);
-        else {
+        std::vector<int> ids;
+        for (const auto& [id, acc] : accounts_) {
+            if (acc.owner() == currentUser_) ids.push_back(id);
+        }
+        if (ids.empty()) {
+            outputBool(false, silent);
+        } else {
             ok = true;
-            if (!silent)
-                for (int id : ids) printAccount(accounts[id]);
+            if (!silent) {
+                for (int id : ids) outputAccount(accounts_[id], false);
+            }
         }
     } else if (cmd == "DEPOSIT" && tok.size() == 3) {
         int id;
-        double amt;
-        if (parseInt(tok[1], id) && canAccessOwned(id) && parseDouble(tok[2], amt) && amt >= 0) {
-            accounts[id].balance += amt;
+        double amount;
+        if (parseInt(tok[1], id) && canAccessOwnedAccount(id) && parseDouble(tok[2], amount) && amount >= 0) {
+            accounts_[id].deposit(amount);
             ok = changed = true;
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "WITHDRAW" && tok.size() == 3) {
         int id;
-        double amt;
-        if (parseInt(tok[1], id) && canAccessOwned(id) && parseDouble(tok[2], amt) && amt >= 0) {
-            auto& a = accounts[id];
-            bool enough = (a.type == AccountType::Savings) ? (a.balance + 1e-9 >= amt) : (a.balance + a.credit + 1e-9 >= amt);
-            if (enough) {
-                a.balance -= amt;
-                ok = changed = true;
-            }
-        }
-        printBool(ok, silent);
-    } else if (cmd == "TRANSFER" && tok.size() == 4) {
-        int s, t;
-        double amt;
-        if (parseInt(tok[1], s) && parseInt(tok[2], t) && parseDouble(tok[3], amt) && amt >= 0 && s != t &&
-            canAccessOwned(s) && accounts.count(t)) {
-            auto& src = accounts[s];
-            auto& dst = accounts[t];
-            bool enough =
-                (src.type == AccountType::Savings) ? (src.balance + 1e-9 >= amt) : (src.balance + src.credit + 1e-9 >= amt);
-            if (enough) {
-                src.balance -= amt;
-                dst.balance += amt;
-                ok = changed = true;
-            }
-        }
-        printBool(ok, silent);
-    } else if (cmd == "SHOW_DATE" && tok.size() == 1) {
-        ok = true;
-        if (!silent) cout << showDateString(currentDate) << '\n';
-    } else if (cmd == "ADD_DAY" && tok.size() == 2) {
-        int n;
-        if (parseInt(tok[1], n) && n > 0) {
-            for (int i = 0; i < n; ++i) advanceOneDay();
+        double amount;
+        if (parseInt(tok[1], id) && canAccessOwnedAccount(id) && parseDouble(tok[2], amount) && accounts_[id].withdraw(amount)) {
             ok = changed = true;
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
+    } else if (cmd == "TRANSFER" && tok.size() == 4) {
+        int srcId, dstId;
+        double amount;
+        if (parseInt(tok[1], srcId) && parseInt(tok[2], dstId) && parseDouble(tok[3], amount) && amount >= 0 && srcId != dstId &&
+            canAccessOwnedAccount(srcId) && accounts_.count(dstId) && accounts_[srcId].canWithdraw(amount)) {
+            accounts_[srcId].withdraw(amount);
+            accounts_[dstId].deposit(amount);
+            ok = changed = true;
+        }
+        outputBool(ok, silent);
+    } else if (cmd == "SHOW_DATE" && tok.size() == 1) {
+        ok = true;
+        if (!silent) std::cout << currentDate_.toDisplayString() << '\n';
+    } else if (cmd == "ADD_DAY" && tok.size() == 2) {
+        int days;
+        if (parseInt(tok[1], days) && days > 0) {
+            for (int i = 0; i < days; ++i) settleOneDay();
+            ok = changed = true;
+        }
+        outputBool(ok, silent);
     } else if (cmd == "SET_DATE" && tok.size() == 4) {
         int y, m, d;
-        if (parseInt(tok[1], y) && parseInt(tok[2], m) && parseInt(tok[3], d) && validDate(y, m, d)) {
-            SimpleDate nd{y, m, d};
-            if (isAfter(nd, currentDate)) {
-                while (isAfter(nd, currentDate)) advanceOneDay();
+        if (parseInt(tok[1], y) && parseInt(tok[2], m) && parseInt(tok[3], d) && Date::isValid(y, m, d)) {
+            Date newDate(y, m, d);
+            if (newDate.isAfter(currentDate_)) {
+                while (newDate.isAfter(currentDate_)) settleOneDay();
                 ok = changed = true;
             }
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "LOG" && tok.size() == 1) {
         ok = true;
         if (!silent) {
-            if (logs.empty())
-                cout << 0 << '\n';
-            else {
-                for (size_t i = 0; i < logs.size(); ++i) cout << (i + 1) << ' ' << logs[i] << '\n';
+            if (logs_.empty()) {
+                std::cout << 0 << '\n';
+            } else {
+                for (size_t i = 0; i < logs_.size(); ++i) std::cout << (i + 1) << ' ' << logs_[i] << '\n';
             }
         }
     } else if (cmd == "ROLLBACK" && tok.size() == 2) {
         int id;
-        if (parseInt(tok[1], id) && id >= 0 && id <= static_cast<int>(logs.size())) {
-            vector<string> keep(logs.begin(), logs.begin() + id);
+        if (parseInt(tok[1], id) && id >= 0 && id <= static_cast<int>(logs_.size())) {
+            std::vector<std::string> keep(logs_.begin(), logs_.begin() + id);
             resetInitial();
             for (const auto& c : keep) execute(c, true, true);
             ok = true;
-            changed = false;
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "SAVE" && tok.size() == 2) {
-        ofstream ofs(tok[1]);
+        std::ofstream ofs(tok[1]);
         if (ofs) {
-            for (size_t i = 0; i < logs.size(); ++i) ofs << (i + 1) << ' ' << logs[i] << '\n';
+            for (size_t i = 0; i < logs_.size(); ++i) ofs << (i + 1) << ' ' << logs_[i] << '\n';
             ok = true;
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "RESUME" && tok.size() == 2) {
-        if (logs.empty()) {
-            ifstream ifs(tok[1]);
-            vector<string> loaded;
+        if (logs_.empty()) {
+            std::ifstream ifs(tok[1]);
+            std::vector<std::string> loaded;
             ok = static_cast<bool>(ifs);
             if (ok) {
-                string line;
+                std::string line;
                 int expected = 1;
-                while (getline(ifs, line)) {
+                while (std::getline(ifs, line)) {
                     if (!line.empty() && line.back() == '\r') line.pop_back();
                     if (line.empty()) continue;
-                    istringstream lis(line);
+                    std::istringstream lis(line);
                     int idx;
                     if (!(lis >> idx) || idx != expected) {
                         ok = false;
                         break;
                     }
-                    string rest;
-                    getline(lis, rest);
+                    std::string rest;
+                    std::getline(lis, rest);
                     if (!rest.empty() && rest[0] == ' ') rest.erase(rest.begin());
                     if (rest.empty()) {
                         ok = false;
@@ -349,71 +386,73 @@ bool BankSystem::execute(const string& raw, bool silent, bool allowLog) {
                 if (!ok) resetInitial();
             }
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "CREATE_USER" && tok.size() == 2) {
-        static const regex re("^[A-Za-z0-9]+$");
-        if (isAdmin() && regex_match(tok[1], re) && !users.count(tok[1])) {
-            users.insert(tok[1]);
+        if (isAdmin() && isValidUsername(tok[1]) && !users_.count(tok[1])) {
+            users_.insert(tok[1]);
             ok = changed = true;
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "DELETE_USER" && tok.size() == 2) {
-        const string& u = tok[1];
-        if (isAdmin() && u != "admin" && users.count(u)) {
-            bool hasAcc = false;
-            for (const auto& [_, a] : accounts)
-                if (a.owner == u) {
-                    hasAcc = true;
+        const std::string& username = tok[1];
+        if (isAdmin() && username != "admin" && users_.count(username)) {
+            bool hasAccount = false;
+            for (const auto& [_, acc] : accounts_) {
+                if (acc.owner() == username) {
+                    hasAccount = true;
                     break;
                 }
-            if (!hasAcc) {
-                users.erase(u);
-                if (currentUser == u) currentUser = "default";
+            }
+            if (!hasAccount) {
+                users_.erase(username);
+                if (currentUser_ == username) currentUser_ = "default";
                 ok = changed = true;
             }
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "QUERY_USER" && tok.size() == 2) {
-        const string& u = tok[1];
-        if (isAdmin() && users.count(u)) {
-            vector<int> ids;
-            for (const auto& [id, a] : accounts)
-                if (a.owner == u) ids.push_back(id);
+        const std::string& username = tok[1];
+        if (isAdmin() && users_.count(username)) {
+            std::vector<int> ids;
+            for (const auto& [id, acc] : accounts_) {
+                if (acc.owner() == username) ids.push_back(id);
+            }
             if (!ids.empty()) {
                 ok = true;
-                if (!silent)
-                    for (int id : ids) printAccount(accounts[id]);
+                if (!silent) {
+                    for (int id : ids) outputAccount(accounts_[id], false);
+                }
             }
         }
-        if (!ok) printBool(false, silent);
+        if (!ok) outputBool(false, silent);
     } else if (cmd == "QUERY_USERLIST" && tok.size() == 1) {
-        if (!users.empty()) {
+        if (!users_.empty()) {
             ok = true;
             if (!silent) {
-                map<string, int> cnt;
-                for (const auto& u : users) cnt[u] = 0;
-                for (const auto& [_, a] : accounts) cnt[a.owner]++;
-                for (const auto& [u, c] : cnt) cout << "USER " << u << ' ' << c << '\n';
+                std::map<std::string, int> count;
+                for (const auto& u : users_) count[u] = 0;
+                for (const auto& [_, acc] : accounts_) count[acc.owner()]++;
+                for (const auto& [u, c] : count) std::cout << "USER " << u << ' ' << c << '\n';
             }
         }
-        if (!ok) printBool(false, silent);
+        if (!ok) outputBool(false, silent);
     } else if (cmd == "SWITCH" && tok.size() == 2) {
-        if (users.count(tok[1])) {
-            currentUser = tok[1];
+        if (users_.count(tok[1])) {
+            currentUser_ = tok[1];
             ok = changed = true;
         }
-        printBool(ok, silent);
+        outputBool(ok, silent);
     } else if (cmd == "WHOAMI" && tok.size() == 1) {
-        if (!currentUser.empty()) {
+        if (!currentUser_.empty()) {
             ok = true;
-            if (!silent) cout << currentUser << '\n';
+            if (!silent) std::cout << currentUser_ << '\n';
         }
-        if (!ok) printBool(false, silent);
+        if (!ok) outputBool(false, silent);
     } else {
-        printBool(false, silent);
+        outputBool(false, silent);
     }
 
-    addLogIfNeeded(raw, changed, allowLog);
+    appendLogIfNeeded(raw, changed, allowLog);
     return ok;
 }
 
